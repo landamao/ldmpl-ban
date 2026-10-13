@@ -1,0 +1,33 @@
+{
+    "黑名单群聊": {
+        "description": "黑名单群聊",
+        "hint": "黑名单群聊/屏蔽群聊，屏蔽该群的所有消息，群无屏蔽/拉黑模式区分",
+        "type": "list",
+        "default": []
+    },
+    "包括管理员": {
+        "description": "包括管理员",
+        "hint": "拉黑对管理员也生效",
+        "type": "bool",
+        "default": false
+    },
+    "用户可查": {
+        "description": "用户可查自己的信息",
+        "hint": "每个用户可以查询自己是否被拉黑/屏蔽",
+        "type": "bool",
+        "default": true
+    },
+    "用户可查群": {
+        "description": "用户可查所在群的信息",
+        "hint": "用户可查看当前群的黑名单/屏蔽名单列表",
+        "type": "bool",
+        "default": false
+    },
+    "模型": {
+        "description": "智能分析模型",
+        "type": "string",
+        "hint": "使用智能拉黑/屏蔽/解除拉黑/解除屏蔽指令时分析用户ID，用户名，群号，理由，时长的模型，留空使用当前默认值",
+        "_special": "select_provider",
+        "default": ""
+    }
+}
