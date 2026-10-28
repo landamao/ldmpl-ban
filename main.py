@@ -15,10 +15,11 @@ from .utils import (
 解除屏蔽群指令名 = tuple(f"解除{i}" for i in 屏蔽群指令名)
 查看黑名单指令名 = ("查看黑名单", "查询黑名单", "查看拉黑名单", "查看屏蔽名单", "查询屏蔽名单")
 查看群黑名单指令名 = ("查看群黑名单", "查询群黑名单", "查询群拉黑名单", "查看群屏蔽名单", "查询群屏蔽名单")
+查看全部黑名单指令名 = ("查看全部黑名单", "查看所有黑名单", "查询全部黑名单", "查询所有黑名单")
 智能指令名 = ("智能拉黑", "智能屏蔽", "智能解除拉黑", "智能解除屏蔽")
 本插件指令名集合 = set(
     屏蔽群指令名 + 解除屏蔽群指令名 + 查看黑名单指令名 + 查看群黑名单指令名 +
-    智能指令名 +
+    查看全部黑名单指令名 + 智能指令名 +
     (
         "拉黑", "屏蔽", "解除拉黑", "解除屏蔽", "清空黑名单",
         "搜索黑名单", "搜索用户"
@@ -30,6 +31,9 @@ from .utils import (
 全局 = "全局"
 """特殊群，全局"""
 特殊群 = (全局, 私聊)
+
+LLM操作者 = "llm"
+"""llm工具写入记录的操作者标记，llm只能解除自己写入的记录"""
 
 实例 = None  # type: 黑名单系统 | None
 
@@ -590,6 +594,49 @@ class 黑名单系统(Star):
             yield event.plain_result('\n'.join(rs).strip())
             # append的长消息用yield走框架的合并转发
 
+    @filter.command(查看全部黑名单指令名[0], alias={*查看全部黑名单指令名[1:]})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def 查看全部黑名单指令(self, event: AstrMessageEvent):
+        """查看所有群/私聊/全局的黑名单与屏蔽名单（仅管理员）"""
+        event.stop_event()
+        m = M(event)
+        全部 = self.黑名单管理器.获取所有信息()
+        分组 = {}
+        c = 0
+        for gid, gv in 全部.items():
+            rs = []
+            for r in gv.values():
+                if r.已结束:
+                    continue
+                c += 1
+                rs.append(
+                    f"[{c}] 用户：{r.用户名}（{r.用户ID}）"
+                    f"\n    - 被{r.模式}"
+                    f"\n    - 剩余时间：{r.剩余时间}"
+                    f"\n    - 结束时间：{r.结束时间}"
+                    f"\n    - 理由：{r.理由}"
+                    f"\n    - 操作者：{r.操作者}\n"
+                )
+            if rs:
+                分组[gid] = rs
+        if not 分组:
+            await m.send("⚠️ 当前没有任何黑名单/屏蔽记录")
+            return
+        rs = [f"全部黑名单记录，共{c}条：\n"]
+        for gid in sorted(分组, key=lambda g: (0 if g == 全局 else 1 if g == 私聊 else 2, g)):
+            gna = await m.get_group_name(gid, bq=False)
+            if gid == 全局:
+                rs.append("── 全局 ──")
+            elif gid == 私聊:
+                rs.append("── 私聊 ──")
+            elif gna:
+                rs.append(f"── 群「{gna}（{gid}）」 ──")
+            else:
+                rs.append(f"── 群「{gid}」 ──")
+            rs.append("\n".join(分组[gid]))
+        yield event.plain_result('\n'.join(rs).strip())
+        # 长消息用yield走框架的合并转发
+
     @filter.command("搜索黑名单", alias={"搜索用户"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def 搜索黑名单指令(self, event: AstrMessageEvent):
@@ -825,21 +872,57 @@ class 黑名单系统(Star):
         m = M(event)
         用户名 = await m.get_user_name(gid=gid, uid=uid)
         r = self.黑名单管理器.获取用户信息(用户ID=uid, 群ID=gid)
-        if r and not r.已结束 and r.操作者 != "llm":
+        if r and not r.已结束 and r.操作者 != LLM操作者:
             return (
                 f"用户 {uid} 已被管理员{r.模式}（剩余时间：{r.剩余时间}，"
                 f"理由：{r.理由}），不能覆盖管理员设置"
             )
         if gid not in 特殊群:
             全局r = self.黑名单管理器.获取用户信息(用户ID=uid, 群ID=全局)
-            if 全局r and not 全局r.已结束 and 全局r.操作者 != "llm":
+            if 全局r and not 全局r.已结束 and 全局r.操作者 != LLM操作者:
                 return (
                     f"用户 {uid} 已被管理员全局{全局r.模式}（剩余时间：{全局r.剩余时间}，"
                     f"理由：{全局r.理由}），无需重复处理"
                 )
 
         rs = self.黑名单管理器.加入黑名单(
-            用户ID=uid, 群ID=gid, 时间=时长, 理由=理由, 操作者="llm", 模式=模式s,
+            用户ID=uid, 群ID=gid, 时间=时长, 理由=理由, 操作者=LLM操作者, 模式=模式s,
             用户名=用户名
         )
         return 格式化拉黑显示(rs)
+
+    @filter.llm_tool("remove_from_blacklist")
+    async def 解除黑名单工具(
+            self,
+            event: AstrMessageEvent,
+            user_id: str,
+    ):
+        """解除你自己（llm工具）之前添加的黑名单/屏蔽记录
+        Args:
+            user_id(string): 用户ID（QQ号），要解除拉黑/屏蔽的用户
+        """
+        if not self.llm模式:
+            return "管理员禁用了此功能"
+        uid = str(user_id or "").strip()
+        if not uid:
+            return "user_id，请填写有效的用户ID"
+        if uid in {event.get_self_id(), event.get_sender_id()}:
+            return "不能解除机器人自己或指令发送者的黑名单/屏蔽记录"
+        gid = event.get_group_id() or 私聊
+        r = self.黑名单管理器.获取用户信息(用户ID=uid, 群ID=gid)
+        if (r is None or r.已结束) and gid not in 特殊群:
+            # 当前群里没有，再尝试全局记录
+            全局r = self.黑名单管理器.获取用户信息(用户ID=uid, 群ID=全局)
+            if 全局r is not None and not 全局r.已结束:
+                gid, r = 全局, 全局r
+        if r is None or r.已结束:
+            return f"未找到用户 {uid} 的黑名单/屏蔽记录，无需解除"
+        if r.操作者 != LLM操作者:
+            return (
+                f"用户 {uid} 的{r.模式}记录由管理员（{r.操作者}）设置，"
+                f"你只能解除自己添加的记录，请让管理员用解除指令处理"
+            )
+        d = self.黑名单管理器.解除拉黑(用户ID=uid, 群ID=gid)
+        if d is None:
+            return f"未找到用户 {uid} 的黑名单/屏蔽记录，无需解除"
+        return 格式化解除拉黑显示(d)
